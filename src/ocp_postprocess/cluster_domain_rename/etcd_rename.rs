@@ -1429,3 +1429,55 @@ pub(crate) async fn fix_mcs_daemonset(etcd_client: &InMemoryK8sEtcd, cluster_dom
 
     Ok(())
 }
+
+pub(crate) async fn get_original_domain(etcd_client: &Arc<InMemoryK8sEtcd>) -> Result<String> {
+    let k8s_resource_location = K8sResourceLocation::new(None, "Infrastructure", "cluster", "config.openshift.io");
+    let config = get_etcd_json(etcd_client, &k8s_resource_location)
+        .await?
+        .context("could not find infrastructure cluster config")?;
+    let api_url = config
+        .pointer("/status/apiServerURL")
+        .context("no apiServerURL")?
+        .as_str()
+        .context("apiServerURL not a string")?;
+    let domain = api_url
+        .strip_prefix("https://api.")
+        .context("apiServerURL doesn't start with https://api.")?
+        .strip_suffix(":6443")
+        .context("apiServerURL doesn't end with :6443")?;
+    Ok(domain.to_string())
+}
+
+pub(crate) async fn fix_configmap_and_secret_domain_references(
+    etcd_client: &Arc<InMemoryK8sEtcd>,
+    old_domain: &str,
+    new_domain: &str,
+) -> Result<()> {
+    if old_domain == new_domain {
+        return Ok(());
+    }
+
+    for resource_prefix in ["configmaps", "secrets"] {
+        let keys = etcd_client.list_keys(resource_prefix).await?;
+        for key in keys {
+            let etcd_result = match etcd_client.get(key.clone()).await? {
+                Some(r) => r,
+                None => continue,
+            };
+
+            let value_str = match String::from_utf8(etcd_result.value.clone()) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            if !value_str.contains(old_domain) {
+                continue;
+            }
+
+            let replaced = value_str.replace(old_domain, new_domain);
+            etcd_client.put(&key, replaced.into_bytes()).await;
+        }
+    }
+
+    Ok(())
+}

@@ -421,3 +421,62 @@ fn replace_node_status_name(cluster: &mut Value, hostname: &str) -> Result<()> {
 
     Ok(())
 }
+
+pub(crate) async fn fix_persistent_volumes(etcd_client: &Arc<InMemoryK8sEtcd>, original_hostname: &str, hostname: &str) -> Result<()> {
+    let pv_keys = etcd_client.list_keys("persistentvolumes").await?;
+
+    for key in pv_keys {
+        let etcd_result = etcd_client
+            .get(key.clone())
+            .await
+            .with_context(|| format!("getting key {:?}", key))?;
+
+        let etcd_result = match etcd_result {
+            Some(r) => r,
+            None => continue,
+        };
+
+        let value_str = match String::from_utf8(etcd_result.value.clone()) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        let mut pv: Value = match serde_json::from_str(&value_str) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let mut modified = false;
+
+        if let Some(terms) = pv.pointer_mut("/spec/nodeAffinity/required/nodeSelectorTerms") {
+            if let Some(terms_arr) = terms.as_array_mut() {
+                for term in terms_arr.iter_mut() {
+                    if let Some(exprs) = term.pointer_mut("/matchExpressions") {
+                        if let Some(exprs_arr) = exprs.as_array_mut() {
+                            for expr in exprs_arr.iter_mut() {
+                                if let Some(values) = expr.pointer_mut("/values") {
+                                    if let Some(values_arr) = values.as_array_mut() {
+                                        for val in values_arr.iter_mut() {
+                                            if val.as_str() == Some(original_hostname) {
+                                                *val = Value::String(hostname.to_string());
+                                                modified = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if modified {
+            etcd_client
+                .put(&key, serde_json::to_string(&pv)?.as_bytes().into())
+                .await;
+        }
+    }
+
+    Ok(())
+}

@@ -5,7 +5,7 @@ use super::protobuf_gen::{
             admissionregistration::v1::{MutatingWebhookConfiguration, ValidatingWebhookConfiguration},
             apps::v1::{ControllerRevision, DaemonSet, Deployment, StatefulSet},
             batch::v1::{CronJob, Job},
-            core::v1::{ConfigMap, Node, Pod, Secret},
+            core::v1::{ConfigMap, Node, PersistentVolume, Pod, Secret},
         },
         apimachinery::pkg::runtime::{TypeMeta, Unknown},
     },
@@ -62,6 +62,7 @@ k8s_type!(PodWithMeta, Pod);
 k8s_type!(ValidatingWebhookConfigurationWithMeta, ValidatingWebhookConfiguration);
 k8s_type!(MutatingWebhookConfigurationWithMeta, MutatingWebhookConfiguration);
 k8s_type!(OAuthClientWithMeta, OAuthClient);
+k8s_type!(PersistentVolumeWithMeta, PersistentVolume);
 
 pub(crate) async fn decode(data: &[u8]) -> Result<Vec<u8>> {
     if !data.starts_with("k8s\x00".as_bytes()) {
@@ -94,6 +95,7 @@ pub(crate) async fn decode(data: &[u8]) -> Result<Vec<u8>> {
         "ValidatingWebhookConfiguration" => serde_json::to_vec(&ValidatingWebhookConfigurationWithMeta::try_from(unknown)?)?,
         "MutatingWebhookConfiguration" => serde_json::to_vec(&MutatingWebhookConfigurationWithMeta::try_from(unknown)?)?,
         "OAuthClient" => serde_json::to_vec(&OAuthClientWithMeta::try_from(unknown)?)?,
+        "PersistentVolume" => serde_json::to_vec(&PersistentVolumeWithMeta::try_from(unknown)?)?,
         _ => bail!("unknown kind {}", kind),
     })
 }
@@ -124,6 +126,7 @@ pub(crate) async fn encode(data: &[u8]) -> Result<Vec<u8>> {
             "ValidatingWebhookConfiguration" => Unknown::from(serde_json::from_slice::<ValidatingWebhookConfigurationWithMeta>(data)?),
             "MutatingWebhookConfiguration" => Unknown::from(serde_json::from_slice::<MutatingWebhookConfigurationWithMeta>(data)?),
             "OAuthClient" => Unknown::from(serde_json::from_slice::<OAuthClientWithMeta>(data)?),
+            "PersistentVolume" => Unknown::from(serde_json::from_slice::<PersistentVolumeWithMeta>(data)?),
             _ => return Ok(data.to_vec()),
         }
         .encode_to_vec(),
