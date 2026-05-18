@@ -1,4 +1,5 @@
 use super::{
+    crypto_utils,
     distributed_public_key::DistributedPublicKey,
     keys::PrivateKey,
     locations::{FileContentLocation, FileLocation, K8sLocation, Location, LocationValueType, Locations},
@@ -15,6 +16,8 @@ use crate::{
     rsa_key_pool::RsaKeyPool,
 };
 use anyhow::{bail, Context, Result};
+use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
+use x509_certificate::EcdsaCurve;
 use pkcs1::EncodeRsaPrivateKey;
 use rsa::traits::PublicKeyParts;
 use serde::Serialize;
@@ -31,12 +34,26 @@ pub(crate) struct DistributedPrivateKey {
 
 impl DistributedPrivateKey {
     pub(crate) fn regenerate(&mut self, rsa_key_pool: &mut RsaKeyPool, crypto_customizations: &CryptoCustomizations) -> Result<()> {
-        let num_bits = match &self.key {
-            PrivateKey::Rsa(key) => key.n().to_radix_le(2).len(),
-            PrivateKey::Ec(_) => bail!("cannot regenerate standalone EC key"),
+        let self_new_key_pair = match &self.key {
+            PrivateKey::Rsa(key) => {
+                let num_bits = key.n().to_radix_le(2).len();
+                rsa_key_pool.get(num_bits).context("RSA pool empty")?
+            }
+            PrivateKey::Ec(ec_bytes) => {
+                let curve = if EcdsaKeyPair::from_pkcs8(
+                    &ECDSA_P256_SHA256_ASN1_SIGNING,
+                    ec_bytes,
+                    &ring::rand::SystemRandom::new(),
+                )
+                .is_ok()
+                {
+                    EcdsaCurve::Secp256r1
+                } else {
+                    EcdsaCurve::Secp384r1
+                };
+                crypto_utils::generate_ec_key(curve).context("generating ec key")?
+            }
         };
-
-        let self_new_key_pair = rsa_key_pool.get(num_bits).context("RSA pool empty")?;
 
         for signee in &mut self.signees {
             signee.regenerate(Some(&self_new_key_pair), rsa_key_pool, crypto_customizations, None, None)?;
