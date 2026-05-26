@@ -16,12 +16,41 @@ use std::{
 };
 use x509_certificate::InMemorySigningKeyPair;
 
-#[derive(Hash, Eq, PartialEq, Clone)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) enum RsaKeyFormat {
+    #[default]
+    Pkcs1,
+    Pkcs8,
+}
+
+#[derive(Clone)]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum PrivateKey {
-    Rsa(RsaPrivateKey),
+    Rsa(RsaPrivateKey, RsaKeyFormat),
     Ec(Bytes),
 }
+
+impl std::hash::Hash for PrivateKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        match self {
+            Self::Rsa(key, _) => key.hash(state),
+            Self::Ec(bytes) => bytes.hash(state),
+        }
+    }
+}
+
+impl PartialEq for PrivateKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Rsa(a, _), Self::Rsa(b, _)) => a == b,
+            (Self::Ec(a), Self::Ec(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for PrivateKey {}
 
 impl Serialize for PrivateKey {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -33,7 +62,7 @@ impl Serialize for PrivateKey {
         }
 
         match self {
-            Self::Rsa(rsa_private_key) => serializer.serialize_str(
+            Self::Rsa(rsa_private_key, _) => serializer.serialize_str(
                 &base64_standard.encode(
                     rsa_private_key
                         .to_pkcs8_pem(LineEnding::LF)
@@ -57,7 +86,7 @@ impl TryFrom<&InMemorySigningKeyPair> for PrivateKey {
                     "converting in memory pair to RSA PrivateKey {:?}",
                     Bytes::copy_from_slice(vec.as_ref())
                 ))?;
-                PrivateKey::Rsa(rsa_private_key)
+                PrivateKey::Rsa(rsa_private_key, RsaKeyFormat::default())
             }
         })
     }
@@ -66,7 +95,7 @@ impl TryFrom<&InMemorySigningKeyPair> for PrivateKey {
 impl std::fmt::Debug for PrivateKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Rsa(_) => write!(f, "<rsa_priv>"),
+            Self::Rsa(_, _) => write!(f, "<rsa_priv>"),
             Self::Ec(_) => write!(f, "<ec_priv>"),
         }
     }
@@ -75,9 +104,28 @@ impl std::fmt::Debug for PrivateKey {
 impl PrivateKey {
     pub(crate) fn pem(&self) -> Result<pem::Pem> {
         Ok(match &self {
-            PrivateKey::Rsa(rsa_private_key) => pem::Pem::new("RSA PRIVATE KEY", rsa_private_key.to_pkcs1_der()?.as_bytes()),
+            PrivateKey::Rsa(rsa_private_key, RsaKeyFormat::Pkcs1) => {
+                pem::Pem::new("RSA PRIVATE KEY", rsa_private_key.to_pkcs1_der()?.as_bytes())
+            }
+            PrivateKey::Rsa(rsa_private_key, RsaKeyFormat::Pkcs8) => {
+                let pkcs8_der = rsa_private_key.to_pkcs8_der().context("converting RSA key to PKCS#8 DER")?;
+                pem::Pem::new("PRIVATE KEY", pkcs8_der.as_bytes())
+            }
             PrivateKey::Ec(ec_bytes) => pem::Pem::new("EC PRIVATE KEY", ec_bytes.as_ref()),
         })
+    }
+
+    pub(crate) fn rsa_key_format(&self) -> RsaKeyFormat {
+        match self {
+            PrivateKey::Rsa(_, format) => *format,
+            PrivateKey::Ec(_) => RsaKeyFormat::default(),
+        }
+    }
+
+    pub(crate) fn set_rsa_key_format(&mut self, format: RsaKeyFormat) {
+        if let PrivateKey::Rsa(_, ref mut f) = self {
+            *f = format;
+        }
     }
 }
 
@@ -108,7 +156,7 @@ impl TryFrom<&PrivateKey> for PublicKey {
 
     fn try_from(priv_key: &PrivateKey) -> Result<Self> {
         Ok(match priv_key {
-            PrivateKey::Rsa(private_key) => PublicKey::from_rsa_bytes(&bytes::Bytes::copy_from_slice(
+            PrivateKey::Rsa(private_key, _) => PublicKey::from_rsa_bytes(&bytes::Bytes::copy_from_slice(
                 private_key.to_public_key().to_public_key_der()?.as_bytes(),
             )),
             PrivateKey::Ec(ec_bytes) => {

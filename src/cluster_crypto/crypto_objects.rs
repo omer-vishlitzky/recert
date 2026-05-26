@@ -1,7 +1,7 @@
 use super::{
     certificate::{self, Certificate},
     jwt,
-    keys::{PrivateKey, PublicKey},
+    keys::{PrivateKey, PublicKey, RsaKeyFormat},
     locations::Location,
     scanning::ExternalCerts,
 };
@@ -180,7 +180,7 @@ fn process_pem_private_key(pem: &pem::Pem) -> Result<Option<CryptoObject>> {
         InMemorySigningKeyPair::Rsa(_, bytes) => {
             let rsa_private_key = rsa::RsaPrivateKey::from_pkcs1_der(&bytes)?;
 
-            let private_part = PrivateKey::Rsa(rsa_private_key);
+            let private_part = PrivateKey::Rsa(rsa_private_key, RsaKeyFormat::Pkcs8);
             let public_part = PublicKey::try_from(&private_part)?;
 
             Some((private_part, public_part).into())
@@ -196,7 +196,7 @@ pub(crate) fn process_pem_public_key(pem: &pem::Pem) -> Option<CryptoObject> {
 pub(crate) fn process_pem_rsa_private_key(pem: &pem::Pem) -> Result<Option<CryptoObject>> {
     let rsa_private_key = rsa::RsaPrivateKey::from_pkcs1_pem(&pem.to_string())?;
 
-    let private_part = PrivateKey::Rsa(rsa_private_key);
+    let private_part = PrivateKey::Rsa(rsa_private_key, RsaKeyFormat::Pkcs1);
     let public_part = PublicKey::try_from(&private_part)?;
 
     Ok(Some((private_part, public_part).into()))

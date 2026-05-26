@@ -18,7 +18,6 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
 use x509_certificate::EcdsaCurve;
-use pkcs1::EncodeRsaPrivateKey;
 use rsa::traits::PublicKeyParts;
 use serde::Serialize;
 use std::{self, cell::RefCell, path::PathBuf, rc::Rc};
@@ -35,7 +34,7 @@ pub(crate) struct DistributedPrivateKey {
 impl DistributedPrivateKey {
     pub(crate) fn regenerate(&mut self, rsa_key_pool: &mut RsaKeyPool, crypto_customizations: &CryptoCustomizations) -> Result<()> {
         let self_new_key_pair = match &self.key {
-            PrivateKey::Rsa(key) => {
+            PrivateKey::Rsa(key, _) => {
                 let num_bits = key.n().to_radix_le(2).len();
                 rsa_key_pool.get(num_bits).context("RSA pool empty")?
             }
@@ -59,7 +58,8 @@ impl DistributedPrivateKey {
             signee.regenerate(Some(&self_new_key_pair), rsa_key_pool, crypto_customizations, None, None)?;
         }
 
-        let regenerated_private_key: PrivateKey = (&self_new_key_pair.in_memory_signing_key_pair).try_into()?;
+        let mut regenerated_private_key: PrivateKey = (&self_new_key_pair.in_memory_signing_key_pair).try_into()?;
+        regenerated_private_key.set_rsa_key_format(self.key.rsa_key_format());
         self.key_regenerated = Some(regenerated_private_key.clone());
 
         if let Some(public_key) = &self.associated_distributed_public_key {
@@ -121,10 +121,7 @@ impl DistributedPrivateKey {
     }
 
     async fn commit_filesystem_private_key(&self, filelocation: &FileLocation) -> Result<()> {
-        let private_key_pem = match &self.key_regenerated.clone().context("key was no regenerated")? {
-            PrivateKey::Rsa(rsa_private_key) => pem::Pem::new("RSA PRIVATE KEY", rsa_private_key.to_pkcs1_der()?.as_bytes()),
-            PrivateKey::Ec(ec_bytes) => pem::Pem::new("EC PRIVATE KEY", ec_bytes.as_ref()),
-        };
+        let private_key_pem = self.key_regenerated.clone().context("key was not regenerated")?.pem()?;
 
         commit_file(
             &filelocation.path,
