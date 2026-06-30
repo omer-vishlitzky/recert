@@ -3,7 +3,7 @@ use bcder::Oid;
 use der::{asn1::OctetString, Decode, Encode};
 use num_bigint::Sign;
 use sha1::{Digest, Sha1};
-use sha2::Sha256;
+use sha2::{Sha256, Sha512};
 use simple_asn1::ASN1Block;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -66,6 +66,15 @@ pub(crate) enum SubjectKeyIdentifierMethod {
     /// - RSA: pub.N.Bytes() (bare modulus, no ASN.1 framing)
     /// - ECDSA: pub.ECDH().Bytes() (uncompressed EC point)
     LibraryGoSha256,
+
+    /// Key identifier calculated as SHA-512 of the RSA public key modulus.
+    /// Used by HyperShift's webhook CA certificate generator:
+    ///
+    /// https://github.com/openshift/hypershift/blob/main/support/certs/tls.go
+    ///
+    /// rsaPubKeySHA512Hash computes sha512.Sum(pub.N.Bytes()).
+    /// Only applies to RSA keys. Produces a 64-byte SKID.
+    HypershiftSha512,
 }
 
 fn rsa_modulus_bytes(tbs_certificate: &rfc5280::TbsCertificate) -> Result<Vec<u8>> {
@@ -120,6 +129,16 @@ fn calculate_skid(tbs_certificate: &rfc5280::TbsCertificate, method: SubjectKeyI
                 // uncompressed EC point), so the brute-force detection in
                 // get_cert_skid_method will always match RFC7093 first for EC certs.
                 Ecdsa(_) => bail!("LibraryGoSha256 for ECDSA is identical to RFC7093, should not reach here"),
+                x509_certificate::KeyAlgorithm::Ed25519 => bail!("ed25519 not supported"),
+            }
+        }
+        SubjectKeyIdentifierMethod::HypershiftSha512 => {
+            let algo = KeyAlgorithm::try_from(&tbs_certificate.subject_public_key_info.algorithm)
+                .ok()
+                .context("failed to get cert key algorithm")?;
+            match algo {
+                x509_certificate::KeyAlgorithm::Rsa => make_skid(&Sha512::digest(rsa_modulus_bytes(tbs_certificate)?)),
+                Ecdsa(_) => bail!("HypershiftSha512 not supported for ECDSA keys"),
                 x509_certificate::KeyAlgorithm::Ed25519 => bail!("ed25519 not supported"),
             }
         }
