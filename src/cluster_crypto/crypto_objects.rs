@@ -339,7 +339,10 @@ mod tests {
 
         match crypto_obj {
             CryptoObject::PrivateKey(private_key, _) => {
-                assert!(matches!(private_key, PrivateKey::Rsa(_)), "expected PrivateKey::Rsa");
+                assert!(
+                    matches!(private_key, PrivateKey::Rsa(_, RsaKeyFormat::Pkcs8)),
+                    "expected PrivateKey::Rsa with RsaKeyFormat::Pkcs8"
+                );
             }
             _ => panic!("expected CryptoObject::PrivateKey"),
         }

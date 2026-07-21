@@ -470,8 +470,9 @@ pub(crate) async fn fix_persistent_volumes(etcd_client: &Arc<InMemoryK8sEtcd>, o
         }
 
         if modified {
+            let encoding = etcd_client.encoding_of(&key).await?;
             etcd_client
-                .put(&key, serde_json::to_string(&pv)?.as_bytes().into())
+                .put(&key, serde_json::to_string(&pv)?.as_bytes().into(), Some(encoding))
                 .await;
         }
     }

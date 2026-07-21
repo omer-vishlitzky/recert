@@ -1494,7 +1494,8 @@ pub(crate) async fn fix_configmap_and_secret_domain_references(
             }
 
             let replaced = value_str.replace(old_domain, new_domain);
-            etcd_client.put(&key, replaced.into_bytes()).await;
+            let encoding = etcd_client.encoding_of(&key).await?;
+            etcd_client.put(&key, replaced.into_bytes(), Some(encoding)).await;
         }
     }
 
