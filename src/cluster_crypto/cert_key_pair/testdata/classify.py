@@ -57,6 +57,8 @@ def classify(cert):
             return "LibraryGoSha1"
         if actual == hashlib.sha256(mod).digest()[:20]:
             return "LibraryGoSha256"
+        if actual == hashlib.sha512(mod).digest():
+            return "LibraryGoSha512"
 
     return "unknown"
 

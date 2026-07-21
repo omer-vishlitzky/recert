@@ -3,7 +3,7 @@ use bcder::Oid;
 use der::{asn1::OctetString, Decode, Encode};
 use num_bigint::Sign;
 use sha1::{Digest, Sha1};
-use sha2::Sha256;
+use sha2::{Sha256, Sha512};
 use simple_asn1::ASN1Block;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -66,6 +66,13 @@ pub(crate) enum SubjectKeyIdentifierMethod {
     /// - RSA: pub.N.Bytes() (bare modulus, no ASN.1 framing)
     /// - ECDSA: pub.ECDH().Bytes() (uncompressed EC point)
     LibraryGoSha256,
+
+    /// Same construction as LibraryGoSha256 (RSA modulus, no ASN.1 framing), but hashed with
+    /// SHA-512 and untruncated. Seen on HyperShift-generated CAs (e.g. hypershift-webhook-ca);
+    /// not yet observed for EC keys.
+    ///
+    /// It only applies for RSA keys.
+    LibraryGoSha512,
 }
 
 fn rsa_modulus_bytes(tbs_certificate: &rfc5280::TbsCertificate) -> Result<Vec<u8>> {
@@ -120,6 +127,16 @@ fn calculate_skid(tbs_certificate: &rfc5280::TbsCertificate, method: SubjectKeyI
                 // uncompressed EC point), so the brute-force detection in
                 // get_cert_skid_method will always match RFC7093 first for EC certs.
                 Ecdsa(_) => bail!("LibraryGoSha256 for ECDSA is identical to RFC7093, should not reach here"),
+                x509_certificate::KeyAlgorithm::Ed25519 => bail!("ed25519 not supported"),
+            }
+        }
+        SubjectKeyIdentifierMethod::LibraryGoSha512 => {
+            let algo = KeyAlgorithm::try_from(&tbs_certificate.subject_public_key_info.algorithm)
+                .ok()
+                .context("failed to get cert key algorithm")?;
+            match algo {
+                x509_certificate::KeyAlgorithm::Rsa => make_skid(&Sha512::digest(rsa_modulus_bytes(tbs_certificate)?)),
+                Ecdsa(_) => bail!("LibraryGoSha512 not supported for ecdsa keys"),
                 x509_certificate::KeyAlgorithm::Ed25519 => bail!("ed25519 not supported"),
             }
         }
@@ -281,6 +298,8 @@ mod tests {
     const RSA_LIBRARY_GO_SHA1: &str = include_str!("testdata/rsa_library_go_sha1.pem");
     // RSA, CN=openshift-cluster-monitoring@1778264477 — SKID via SHA256(RSA modulus)[:20]
     const RSA_LIBRARY_GO_SHA256: &str = include_str!("testdata/rsa_library_go_sha256.pem");
+    // RSA, CN=hypershift-webhook-ca — SKID via SHA512(RSA modulus), untruncated
+    const RSA_LIBRARY_GO_SHA512: &str = include_str!("testdata/rsa_library_go_sha512.pem");
     // EC (P-256), CN=olm-selfsigned-5bb81b5ed486756c — SKID via SHA256(subjectPublicKey BIT STRING)[:20]
     const EC_RFC7093: &str = include_str!("testdata/ec_rfc7093.pem");
 
@@ -322,6 +341,16 @@ mod tests {
     #[test]
     fn test_rsa_library_go_sha256_roundtrip() {
         assert_skid_roundtrip(RSA_LIBRARY_GO_SHA256, SubjectKeyIdentifierMethod::LibraryGoSha256);
+    }
+
+    #[test]
+    fn test_rsa_library_go_sha512_detection() {
+        assert_skid_method(RSA_LIBRARY_GO_SHA512, SubjectKeyIdentifierMethod::LibraryGoSha512);
+    }
+
+    #[test]
+    fn test_rsa_library_go_sha512_roundtrip() {
+        assert_skid_roundtrip(RSA_LIBRARY_GO_SHA512, SubjectKeyIdentifierMethod::LibraryGoSha512);
     }
 
     #[test]
